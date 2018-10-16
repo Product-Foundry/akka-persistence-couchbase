@@ -16,6 +16,8 @@ trait Couchbase extends Extension {
 
   def environment: CouchbaseEnvironment
 
+  def environmentConfig: CouchbaseEnvironmentConfig
+
   def journalBucket: Bucket
 
   def journalConfig: CouchbaseJournalConfig
@@ -29,19 +31,25 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
 
   private val log = Logging(system, getClass.getName)
 
+  override val environmentConfig = CouchbaseEnvironmentConfig(system)
+
   override val journalConfig = CouchbaseJournalConfig(system)
 
   override val snapshotStoreConfig = CouchbaseSnapshotStoreConfig(system)
 
-  override val environment = DefaultCouchbaseEnvironment.create()
+  override val environment = DefaultCouchbaseEnvironment
+                              .builder()
+                              .connectTimeout(environmentConfig.socketConnectTimeout.toMillis)
+                              .socketConnectTimeout(environmentConfig.socketConnectTimeout.toMillis.toInt)
+                              .build();
 
   private val journalCluster = journalConfig.createCluster(environment)
 
-  override val journalBucket = journalConfig.openBucket(journalCluster)
+  override val journalBucket = openJournalBucketWithRetry()
 
   private val snapshotStoreCluster = snapshotStoreConfig.createCluster(environment)
 
-  override val snapshotStoreBucket = snapshotStoreConfig.openBucket(snapshotStoreCluster)
+  override val snapshotStoreBucket = openSnapshotStoreBucketWithRetry()
 
   updateJournalDesignDocs()
   updateSnapshotStoreDesignDocs()
@@ -57,6 +65,36 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
     attemptSafely("Shutting down environment") {
       Blocking.blockForSingle(environment.shutdownAsync().single(), 30, TimeUnit.SECONDS)
     }
+  }
+
+  private def openJournalBucketWithRetry(): Bucket = {
+    var bucket: Bucket = null
+    while(bucket == null) {
+      try {
+        bucket = journalConfig.openBucket(journalCluster)
+      } catch {
+        case ex:  Exception=> {
+          log.warning("Could not connect to journal bucket. Retrying in 10 seconds...")
+          TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryTimeout.toSeconds)
+        }
+      }
+    }
+    return bucket
+  }
+
+  private def openSnapshotStoreBucketWithRetry(): Bucket = {
+    var bucket: Bucket = null
+    while(bucket == null) {
+      try {
+        bucket = snapshotStoreConfig.openBucket(snapshotStoreCluster)
+      } catch {
+        case ex:  Exception=> {
+          log.warning("Could not connect to config bucket. Retrying in 10 seconds...")
+          TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryTimeout.toSeconds)
+        }
+      }
+    }
+    return bucket
   }
 
   private def attemptSafely(message: String)(block: => Unit): Unit = {
