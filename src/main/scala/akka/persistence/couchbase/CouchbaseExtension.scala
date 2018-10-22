@@ -39,7 +39,7 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
 
   override val environment = DefaultCouchbaseEnvironment
                               .builder()
-                              .connectTimeout(environmentConfig.socketConnectTimeout.toMillis)
+                              .connectTimeout(environmentConfig.connectTimeout.toMillis)
                               .socketConnectTimeout(environmentConfig.socketConnectTimeout.toMillis.toInt)
                               .build();
 
