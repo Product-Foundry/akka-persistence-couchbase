@@ -2,7 +2,7 @@ organization := "com.productfoundry"
 
 name := "akka-persistence-couchbase"
 
-version := "0.7.4"
+version := "0.7"
 
 scalaVersion := "2.11.8"
 
