@@ -1,10 +1,11 @@
 package akka.persistence.couchbase
 
 import java.util.concurrent.TimeUnit
+import java.util.Date
 
 import akka.actor.{ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider}
 import akka.event.Logging
-import com.couchbase.client.java.Bucket
+import com.couchbase.client.java._
 import com.couchbase.client.java.document.json.JsonObject
 import com.couchbase.client.java.env.{CouchbaseEnvironment, DefaultCouchbaseEnvironment}
 import com.couchbase.client.java.util.Blocking
@@ -39,17 +40,19 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
 
   override val environment = DefaultCouchbaseEnvironment
                               .builder()
+                              .kvTimeout(environmentConfig.kvTimeout.toMillis)
                               .connectTimeout(environmentConfig.connectTimeout.toMillis)
                               .socketConnectTimeout(environmentConfig.socketConnectTimeout.toMillis.toInt)
+                              .maxRequestLifetime(environmentConfig.maxRequestLifetime.toMillis)
                               .build();
 
   private val journalCluster = journalConfig.createCluster(environment)
 
-  override val journalBucket = openJournalBucketWithRetry()
+  override val journalBucket = openBucketWithRetry(journalConfig, journalCluster)
 
   private val snapshotStoreCluster = snapshotStoreConfig.createCluster(environment)
 
-  override val snapshotStoreBucket = openSnapshotStoreBucketWithRetry()
+  override val snapshotStoreBucket = openBucketWithRetry(snapshotStoreConfig, snapshotStoreCluster)
 
   updateJournalDesignDocs()
   updateSnapshotStoreDesignDocs()
@@ -67,30 +70,27 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
     }
   }
 
-  private def openJournalBucketWithRetry(): Bucket = {
-    var bucket: Bucket = null
-    while(bucket == null) {
-      try {
-        bucket = journalConfig.openBucket(journalCluster)
-      } catch {
-        case ex:  Exception=> {
-          log.warning("Could not connect to journal bucket. Retrying in 10 seconds...")
-          TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryTimeout.toSeconds)
-        }
-      }
+  private def openBucketWithRetry(config: DefaultCouchbasePluginConfig, cluster: Cluster): Bucket = {
+    if(environmentConfig.openBucketRetryTimeout.toSeconds == 0) {
+      return config.openBucket(cluster)
     }
-    return bucket
-  }
 
-  private def openSnapshotStoreBucketWithRetry(): Bucket = {
     var bucket: Bucket = null
+    var end: Date = new Date()
+    end = new Date(end.getTime() + environmentConfig.openBucketRetryTimeout.toMillis.toInt)
+
     while(bucket == null) {
       try {
-        bucket = snapshotStoreConfig.openBucket(snapshotStoreCluster)
+        bucket = config.openBucket(cluster)
       } catch {
-        case ex:  Exception=> {
-          log.warning("Could not connect to config bucket. Retrying in 10 seconds...")
-          TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryTimeout.toSeconds)
+        case e: Throwable => {
+          val now: Date = new Date()
+          if(now.after(end)) {
+            Failure(e)
+          } else {
+            log.warning("Could not connect to bucket. Retrying in {} seconds...", environmentConfig.openBucketRetryInterval.toSeconds)
+            TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryInterval.toSeconds)
+          }
         }
       }
     }
