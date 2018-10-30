@@ -2,9 +2,9 @@ organization := "com.productfoundry"
 
 name := "akka-persistence-couchbase"
 
-version := "0.7"
+version := "0.8"
 
-scalaVersion := "2.11.8"
+scalaVersion := "2.11.11"
 
 fork in Test := true
 

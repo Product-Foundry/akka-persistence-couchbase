@@ -19,9 +19,9 @@ To include the latest release of the Couchbase plugins into your `sbt` project, 
 
     resolvers += "Product-Foundry at bintray" at "http://dl.bintray.com/productfoundry/maven"
 
-    libraryDependencies += "com.productfoundry" %% "akka-persistence-couchbase" % "0.7"
+    libraryDependencies += "com.productfoundry" %% "akka-persistence-couchbase" % "0.8"
 
-This version of `akka-persistence-couchbase` depends on Akka 2.5.3 and Scala 2.11.8.
+This version of `akka-persistence-couchbase` depends on Akka 2.5.3 and Scala 2.11.11.
 
 It is tested on Travis using Couchbase 3.0.1
 
