@@ -1,10 +1,11 @@
 package akka.persistence.couchbase
 
 import java.util.concurrent.TimeUnit
+import java.util.Date
 
 import akka.actor.{ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider}
 import akka.event.Logging
-import com.couchbase.client.java.Bucket
+import com.couchbase.client.java._
 import com.couchbase.client.java.document.json.JsonObject
 import com.couchbase.client.java.env.{CouchbaseEnvironment, DefaultCouchbaseEnvironment}
 import com.couchbase.client.java.util.Blocking
@@ -15,6 +16,8 @@ import scala.util.{Failure, Try}
 trait Couchbase extends Extension {
 
   def environment: CouchbaseEnvironment
+
+  def environmentConfig: CouchbaseEnvironmentConfig
 
   def journalBucket: Bucket
 
@@ -29,19 +32,27 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
 
   private val log = Logging(system, getClass.getName)
 
+  override val environmentConfig = CouchbaseEnvironmentConfig(system)
+
   override val journalConfig = CouchbaseJournalConfig(system)
 
   override val snapshotStoreConfig = CouchbaseSnapshotStoreConfig(system)
 
-  override val environment = DefaultCouchbaseEnvironment.create()
+  override val environment = DefaultCouchbaseEnvironment
+                              .builder()
+                              .kvTimeout(environmentConfig.kvTimeout.toMillis)
+                              .connectTimeout(environmentConfig.connectTimeout.toMillis)
+                              .socketConnectTimeout(environmentConfig.socketConnectTimeout.toMillis.toInt)
+                              .maxRequestLifetime(environmentConfig.maxRequestLifetime.toMillis)
+                              .build();
 
   private val journalCluster = journalConfig.createCluster(environment)
 
-  override val journalBucket = journalConfig.openBucket(journalCluster)
+  override val journalBucket = openBucketWithRetry(journalConfig, journalCluster)
 
   private val snapshotStoreCluster = snapshotStoreConfig.createCluster(environment)
 
-  override val snapshotStoreBucket = snapshotStoreConfig.openBucket(snapshotStoreCluster)
+  override val snapshotStoreBucket = openBucketWithRetry(snapshotStoreConfig, snapshotStoreCluster)
 
   updateJournalDesignDocs()
   updateSnapshotStoreDesignDocs()
@@ -57,6 +68,33 @@ private class DefaultCouchbase(val system: ExtendedActorSystem) extends Couchbas
     attemptSafely("Shutting down environment") {
       Blocking.blockForSingle(environment.shutdownAsync().single(), 30, TimeUnit.SECONDS)
     }
+  }
+
+  private def openBucketWithRetry(config: DefaultCouchbasePluginConfig, cluster: Cluster): Bucket = {
+    if(environmentConfig.openBucketRetryTimeout.toSeconds == 0) {
+      return config.openBucket(cluster)
+    }
+
+    var bucket: Bucket = null
+    var end: Date = new Date()
+    end = new Date(end.getTime() + environmentConfig.openBucketRetryTimeout.toMillis.toInt)
+
+    while(bucket == null) {
+      try {
+        bucket = config.openBucket(cluster)
+      } catch {
+        case e: Throwable => {
+          val now: Date = new Date()
+          if(now.after(end)) {
+            Failure(e)
+          } else {
+            log.warning("Could not connect to bucket. Retrying in {} seconds...", environmentConfig.openBucketRetryInterval.toSeconds)
+            TimeUnit.SECONDS.sleep(environmentConfig.openBucketRetryInterval.toSeconds)
+          }
+        }
+      }
+    }
+    return bucket
   }
 
   private def attemptSafely(message: String)(block: => Unit): Unit = {
